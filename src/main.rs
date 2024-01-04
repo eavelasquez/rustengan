@@ -67,5 +67,14 @@ fn main() -> anyhow::Result<()> {
     let stdout = std::io::stdout().lock();
     let mut output = serde_json::Serializer::new(stdout);
 
+    let mut state = EchoNode { id: 0 };
+
+    for input in inputs {
+        let input = input.context("Maelstrom input from STDIN could not be deserialized")?;
+        state
+            .step(input, &mut output)
+            .context("Node step function failed")?
+    }
+
     Ok(())
 }
