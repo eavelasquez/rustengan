@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     io::{StdoutLock, Write},
 };
 
@@ -18,7 +18,7 @@ enum Payload {
     BroadcastOk,
     Read,
     ReadOk {
-        messages: Vec<usize>,
+        messages: HashSet<usize>,
     },
     Topology {
         topology: HashMap<String, Vec<String>>,
@@ -29,7 +29,9 @@ enum Payload {
 struct BroadcastNode {
     node: String,
     id: usize,
-    messages: Vec<usize>,
+    messages: HashSet<usize>,
+    known: HashMap<String, HashSet<usize>>,
+    neighborhood: Vec<String>,
 }
 
 impl Node<(), Payload> for BroadcastNode {
@@ -40,7 +42,13 @@ impl Node<(), Payload> for BroadcastNode {
         Ok(Self {
             node: init.node_id,
             id: 1,
-            messages: Vec::new(),
+            messages: HashSet::new(),
+            known: init
+                .node_ids
+                .into_iter()
+                .map(|nid| (nid, HashSet::new()))
+                .collect(),
+            neighborhood: Vec::new(),
         })
     }
 
@@ -48,7 +56,7 @@ impl Node<(), Payload> for BroadcastNode {
         let mut reply = input.into_reply(Some(&mut self.id));
         match reply.body.payload {
             Payload::Broadcast { message } => {
-                self.messages.push(message);
+                self.messages.insert(message);
                 reply.body.payload = Payload::BroadcastOk;
                 serde_json::to_writer(&mut *output, &reply)
                     .context("serialize response to broadcast")?;
@@ -64,7 +72,10 @@ impl Node<(), Payload> for BroadcastNode {
                 output.write_all(b"\n").context("write trailing newline")?;
             }
             Payload::ReadOk { .. } => {}
-            Payload::Topology { topology: _ } => {
+            Payload::Topology { mut topology } => {
+                self.neighborhood = topology
+                    .remove(&self.node)
+                    .unwrap_or_else(|| panic!("no topology given for node {}", self.node));
                 reply.body.payload = Payload::TopologyOk;
                 serde_json::to_writer(&mut *output, &reply)
                     .context("serialize response to topology")?;
