@@ -1,4 +1,4 @@
-use std::io::{StdoutLock, Write};
+use std::io::StdoutLock;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -37,9 +37,7 @@ impl Node<(), Payload> for EchoNode {
         match reply.body.payload {
             Payload::Echo { echo } => {
                 reply.body.payload = Payload::EchoOk { echo };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to init")?;
-                output.write_all(b"\n").context("write trailing newline")?;
+                reply.send(&mut *output).context("reply to init")?;
             }
             Payload::EchoOk { .. } => {}
         }

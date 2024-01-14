@@ -1,4 +1,4 @@
-use std::io::{StdoutLock, Write};
+use std::io::StdoutLock;
 
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
@@ -45,10 +45,7 @@ impl Node<(), Payload> for UniqueNode {
             Payload::Generate => {
                 let guid = format!("{}-{}", self.node, self.id);
                 reply.body.payload = Payload::GenerateOk { guid };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to generate")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-                self.id += 1;
+                reply.send(&mut *output).context("reply to generate")?;
             }
             Payload::GenerateOk { .. } => {}
         }
