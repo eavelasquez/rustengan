@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
-    io::{StdoutLock, Write},
+    io::StdoutLock,
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -24,6 +25,13 @@ enum Payload {
         topology: HashMap<String, Vec<String>>,
     },
     TopologyOk,
+    Gossip {
+        seen: HashSet<usize>,
+    },
+}
+
+enum InjectedPayload {
+    Gossip,
 }
 
 struct BroadcastNode {
@@ -34,11 +42,26 @@ struct BroadcastNode {
     neighborhood: Vec<String>,
 }
 
-impl Node<(), Payload> for BroadcastNode {
-    fn from_init(_state: (), init: Init) -> anyhow::Result<Self>
+impl Node<(), Payload, InjectedPayload> for BroadcastNode {
+    fn from_init(
+        _state: (),
+        init: Init,
+        tx: std::sync::mpsc::Sender<Event<Payload, InjectedPayload>>,
+    ) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
+        std::thread::spawn(move || {
+            // generate gossip events
+            // TODO: handle EOF signal
+            loop {
+                std::thread::sleep(Duration::from_millis(300));
+                if let Err(_) = tx.send(Event::Injected(InjectedPayload::Gossip)) {
+                    break;
+                };
+            }
+        });
+
         Ok(Self {
             node: init.node_id,
             id: 1,
@@ -52,41 +75,72 @@ impl Node<(), Payload> for BroadcastNode {
         })
     }
 
-    fn step(&mut self, input: Message<Payload>, output: &mut StdoutLock) -> anyhow::Result<()> {
-        let mut reply = input.into_reply(Some(&mut self.id));
-        match reply.body.payload {
-            Payload::Broadcast { message } => {
-                self.messages.insert(message);
-                reply.body.payload = Payload::BroadcastOk;
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to broadcast")?;
-                output.write_all(b"\n").context("write trailing newline")?;
+    fn step(
+        &mut self,
+        input: Event<Payload, InjectedPayload>,
+        output: &mut StdoutLock,
+    ) -> anyhow::Result<()> {
+        match input {
+            Event::Message(input) => {
+                let mut reply = input.into_reply(Some(&mut self.id));
+                match reply.body.payload {
+                    Payload::Broadcast { message } => {
+                        self.messages.insert(message);
+                        reply.body.payload = Payload::BroadcastOk;
+                        reply.send(&mut *output).context("reply to broadcast")?;
+                    }
+                    Payload::BroadcastOk { .. } => {}
+                    Payload::Read => {
+                        reply.body.payload = Payload::ReadOk {
+                            messages: self.messages.clone(),
+                        };
+                        reply.send(&mut *output).context("reply to read")?;
+                    }
+                    Payload::ReadOk { .. } => {}
+                    Payload::Topology { mut topology } => {
+                        self.neighborhood = topology
+                            .remove(&self.node)
+                            .unwrap_or_else(|| panic!("no topology given for node {}", self.node));
+                        reply.body.payload = Payload::TopologyOk;
+                        reply.send(&mut *output).context("reply to topology")?;
+                    }
+                    Payload::TopologyOk => {}
+                    Payload::Gossip { seen } => {
+                        self.messages.extend(seen);
+                    }
+                }
             }
-            Payload::BroadcastOk { .. } => {}
-            Payload::Read => {
-                reply.body.payload = Payload::ReadOk {
-                    messages: self.messages.clone(),
-                };
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to read")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-            }
-            Payload::ReadOk { .. } => {}
-            Payload::Topology { mut topology } => {
-                self.neighborhood = topology
-                    .remove(&self.node)
-                    .unwrap_or_else(|| panic!("no topology given for node {}", self.node));
-                reply.body.payload = Payload::TopologyOk;
-                serde_json::to_writer(&mut *output, &reply)
-                    .context("serialize response to topology")?;
-                output.write_all(b"\n").context("write trailing newline")?;
-            }
-            Payload::TopologyOk => {}
+            Event::Injected(payload) => match payload {
+                InjectedPayload::Gossip => {
+                    for n in &self.neighborhood {
+                        let known_to_n = &self.known[n];
+                        Message {
+                            src: self.node.clone(),
+                            dst: n.clone(),
+                            body: Body {
+                                id: None,
+                                in_reply_to: None,
+                                payload: Payload::Gossip {
+                                    seen: self
+                                        .messages
+                                        .iter()
+                                        .copied()
+                                        .filter(|m| !known_to_n.contains(m))
+                                        .collect(),
+                                },
+                            },
+                        }
+                        .send(&mut *output)
+                        .with_context(|| format!("gossip to {}", n))?;
+                    }
+                }
+            },
+            Event::EOF => {}
         }
         Ok(())
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    main_loop::<_, BroadcastNode, _>(())
+    main_loop::<_, BroadcastNode, _, _>(())
 }
