@@ -119,8 +119,8 @@ where
             payload: InitPayload::InitOk,
         },
     };
-    serde_json::to_writer(&mut stdout, &reply).context("serialize response to init")?;
-    stdout.write_all(b"\n").context("write trailing newline")?;
+
+    reply.send(&mut stdout).context("send response to init")?;
 
     drop(stdin);
 

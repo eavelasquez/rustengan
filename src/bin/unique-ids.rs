@@ -45,7 +45,7 @@ impl Node<(), Payload> for UniqueNode {
             Payload::Generate => {
                 let guid = format!("{}-{}", self.node, self.id);
                 reply.body.payload = Payload::GenerateOk { guid };
-                reply.send(&mut *output).context("reply to generate")?;
+                reply.send(&mut *output).context("send response to generate")?;
             }
             Payload::GenerateOk { .. } => {}
         }

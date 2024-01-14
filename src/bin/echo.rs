@@ -37,7 +37,7 @@ impl Node<(), Payload> for EchoNode {
         match reply.body.payload {
             Payload::Echo { echo } => {
                 reply.body.payload = Payload::EchoOk { echo };
-                reply.send(&mut *output).context("reply to init")?;
+                reply.send(&mut *output).context("send response to echo")?;
             }
             Payload::EchoOk { .. } => {}
         }
